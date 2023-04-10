@@ -1,0 +1,80 @@
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tproxy64
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: tproxy64
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tproxy64
+subjects:
+- kind: ServiceAccount
+  name: tproxy64
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tproxy64
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: tproxy64
+  namespace: kube-system
+  labels:
+    tier: node
+    app: tproxy64
+    k8s-app: tproxy64
+spec:
+  selector:
+    matchLabels:
+      app: tproxy64
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: tproxy64
+        k8s-app: tproxy64
+    spec:
+      hostNetwork: true
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      serviceAccountName: tproxy64
+      containers:
+      - name: tproxy64-cni
+        image: ghcr.io/aojea/tproxy64:v0.1.0
+        volumeMounts:
+        - name: xtables-lock
+          mountPath: /run/xtables.lock
+          readOnly: false
+        - name: lib-modules
+          mountPath: /lib/modules
+          readOnly: true
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "50Mi"
+          limits:
+            cpu: "100m"
+            memory: "50Mi"
+        securityContext:
+          privileged: false
+          capabilities:
+            add: ["NET_RAW", "NET_ADMIN"]
+      volumes:
+      - name: xtables-lock
+        hostPath:
+          path: /run/xtables.lock
+          type: FileOrCreate
+      - name: lib-modules
+        hostPath:
+          path: /lib/modules
+---
