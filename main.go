@@ -2,16 +2,39 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 
+	"github.com/coreos/go-iptables/iptables"
 	"golang.org/x/sys/unix"
 )
+
+const (
+	tproxyDivertChain = "TPROXY-DIVERT"
+	iptablesMark      = "1"
+)
+
+var (
+	flagPort int
+)
+
+func init() {
+	flag.IntVar(&flagPort, "p", 1, "port to listen")
+
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, "Usage: tproxy64[options]\n\n")
+		flag.PrintDefaults()
+	}
+}
 
 func main() {
 	// trap Ctrl+C and call cancel on the context
@@ -26,8 +49,12 @@ func main() {
 	}()
 	signal.Notify(signalCh, os.Interrupt, unix.SIGINT)
 
-	var err error
-	log.Println("Binding TCP TProxy listener to 0.0.0.0:8080")
+	// install iptables rules to divert traffic
+	err := syncRules()
+	if err != nil {
+		log.Fatalf("Could not sync necessary iptables rules: %v", err)
+	}
+	log.Printf("Binding TCP TProxy listener to 0.0.0.0:%d\n", flagPort)
 
 	// Create Listener Config
 	lc := net.ListenConfig{
@@ -44,7 +71,7 @@ func main() {
 	}
 
 	// Start Listener
-	tcpListener, err := lc.Listen(ctx, "tcp6", "0.0.0.0:8080")
+	tcpListener, err := lc.Listen(ctx, "tcp6", fmt.Sprint("[::]:%d", flagPort))
 	if err != nil {
 		log.Printf("Could not start TCP listener: %s", err)
 		return
@@ -115,4 +142,52 @@ func handleTCPConn(conn net.Conn) {
 	go streamConn(conn, remoteConn)
 
 	streamWait.Wait()
+}
+
+// syncRules syncs the tproxy rules to divert traffic to our server
+func syncRules() error {
+	// Install iptables rule to divert traffic to our webserver
+	ipt, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		return err
+	}
+
+	// make sure our custom chain exists
+	// ip6tables -t mangle -N DIVERT
+	// ip6tables -t mangle -A PREROUTING -p tcp -m socket -j DIVERT
+	// ip6tables -t mangle -A DIVERT -j MARK --set-mark 1
+	// ip6tables -t mangle -A DIVERT -j ACCEPT
+	exists, err := ipt.ChainExists("mangle", tproxyDivertChain)
+	if err != nil {
+		return fmt.Errorf("failed to list chains: %v", err)
+	}
+	if !exists {
+		if err = ipt.NewChain("mangle", tproxyDivertChain); err != nil {
+			return err
+		}
+	}
+	if err := ipt.AppendUnique("mangle", "PREROUTING", "-p", "tcp", "-m", "socket", "-j", tproxyDivertChain); err != nil {
+		return err
+	}
+	if err := ipt.AppendUnique("mangle", tproxyDivertChain, "-j", "MARK", "--set-mark", "1"); err != nil {
+		return err
+	}
+	if err := ipt.AppendUnique("mangle", tproxyDivertChain, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+	// # ip -6 rule add fwmark 1 lookup 100
+	// # ip -6 route add local ::/0 dev lo table 100
+	// TODO: make it idempotent, it creates new rules in each execution, create only if does not exist
+	cmd := exec.Command("ip", "-6", "rule", "add", "fwmark", "1", "lookup", "100")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	cmd = exec.Command("ip", "-6", "route", "add", "local", "::/0", "dev", "lo", "table", "100")
+	if err := cmd.Run(); err != nil {
+		// TODO it returns an error if route exists
+		log.Printf("error trying to do AnyIP to the table 100: %v", err)
+	}
+
+	// ip6tables -t mangle -A PREROUTING -d 64:ff9b::/96 -p tcp -j TPROXY --tproxy-mark 0x1/0x1 --on-port 8080
+	return ipt.InsertUnique("mangle", "PREROUTING", 1, "-p", "tcp", "-d", "64:ff9b::/96", "-j", "TPROXY", "--tproxy-mark", "0x1/0x1", "--on-port", strconv.Itoa(flagPort))
 }
