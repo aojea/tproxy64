@@ -50,7 +50,7 @@ spec:
       serviceAccountName: tproxy64
       containers:
       - name: tproxy64-cni
-        image: ghcr.io/aojea/tproxy64:v0.1.0
+        image: aojea/tproxy64:v0.1.0
         volumeMounts:
         - name: xtables-lock
           mountPath: /run/xtables.lock
