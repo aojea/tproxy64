@@ -3,15 +3,16 @@ name: e2e
 on:
   push:
     branches:
-      - 'master'
+      - 'main'
     tags:
       - 'v*'
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
   workflow_dispatch:
 
 env:
-  GO_VERSION: "1.20.1"
+  GO_VERSION: "1.20.7"
+  K8S_VERSION: "v1.28.1"
   REGISTRY: ghcr.io
   IMAGE_NAME: aojea/tproxy64
 
@@ -79,7 +80,7 @@ jobs:
         # kubectl
         curl -L https://dl.k8s.io/${{ env.K8S_VERSION }}/bin/linux/amd64/kubectl -o ${TMP_DIR}/kubectl
         # kind
-        curl -Lo ${TMP_DIR}/kind https://kind.sigs.k8s.io/dl/v0.17.0/kind-linux-amd64
+        curl -Lo ${TMP_DIR}/kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
         # Install
         sudo cp ${TMP_DIR}/ginkgo /usr/local/bin/ginkgo
         sudo cp ${TMP_DIR}/e2e.test /usr/local/bin/e2e.test
